@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- Added package-provided agent and chain discovery from installed Pi packages and package settings, including read-only management behavior, package source counts in doctor output, nested-cwd project package discovery, and package definitions that remain below user/project overrides. Thanks to Fabian Jocks (@iamfj) for #278.
+- Added `PI_SUBAGENT_EXTRA_AGENT_DIRS` and `PI_INTERCOM_EXTENSION_DIR` overrides so bundled agents and `pi-intercom` can be loaded from read-only package locations. Thanks to David Barroso (@dbarrosop) for #288.
+
+### Fixed
+- Show captured output from failed foreground subagents instead of returning only the failure summary. Thanks to Jürgen Schmied (@jschmied) for #277.
+- Preserve nested fanout child subagent history when building child prompts. Thanks to James Wood (@jamesjwood) for the original #270 fix.
+- Retry Windows atomic JSON renames on transient `EPERM`, `EBUSY`, and `EACCES` failures. Thanks to Wings Butterfly (@wings1848) for #269.
+- Inherit the parent session model for subagents instead of falling back to global settings, including foreground, chain, async chain, async single, and resume/revive paths. Thanks to Rogerio Saulo (@rsaulo) for #266 and Nicolas Marchildon (@elecnix) for the original #283 fix.
+- Avoid duplicate `subagent` tool registration in fanout-authorized child processes. Thanks to Aleksei Gurianov (@Guria) for #279.
+
 ## [0.26.0] - 2026-05-29
 
 ### Added
