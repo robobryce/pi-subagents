@@ -86,6 +86,17 @@ function hasAnyOfArrayWithStringItems(schema: JsonSchemaNode | undefined): boole
 	});
 }
 
+function getPropertySchema(schema: JsonSchemaNode | undefined, path: string[]): JsonSchemaNode | undefined {
+	let current: unknown = schema;
+	for (const key of path) {
+		if (!current || typeof current !== "object") return undefined;
+		current = (current as JsonSchemaNode).properties;
+		if (!current || typeof current !== "object") return undefined;
+		current = (current as Record<string, unknown>)[key];
+	}
+	return current && typeof current === "object" ? current as JsonSchemaNode : undefined;
+}
+
 let schemas: Record<string, JsonSchemaNode> = {};
 let SubagentParams: SubagentParamsSchema | undefined;
 let schemasAvailable = true;
@@ -122,7 +133,6 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const taskCountSchema = taskSchema?.count;
 		assert.ok(taskCountSchema, "tasks[].count schema should exist");
 		assert.equal(taskCountSchema.minimum, 1);
-		assert.match(String(taskCountSchema.description ?? ""), /repeat/i);
 		const outputSchema = taskSchema?.output as JsonSchemaNode | undefined;
 		assert.equal(outputSchema?.type, undefined);
 		assert.equal(hasAnyOfType(outputSchema, "string"), true);
@@ -234,6 +244,55 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		}
 
 		assert.deepEqual(missingItemsPaths, []);
+	});
+
+	it("keeps only top-level parameter descriptions to keep the provider payload compact", () => {
+		assert.ok(SubagentParams, "SubagentParams schema should exist");
+		const schema = SubagentParams as unknown as JsonSchemaNode;
+		const serialized = JSON.stringify(schema);
+		assert.ok(serialized.length < 17_500, `expected compact schema under 17.5k chars, got ${serialized.length}`);
+		assert.equal(serialized.includes('"$ref"'), false);
+		assert.equal(serialized.includes('"$defs"'), false);
+		assert.equal(serialized.split("Optional acceptance policy.").length - 1, 1);
+		assert.match(String((schema.properties as Record<string, JsonSchemaNode> | undefined)?.agent?.description ?? ""), /SINGLE mode/);
+		assert.match(String((schema.properties as Record<string, JsonSchemaNode> | undefined)?.acceptance?.description ?? ""), /acceptance policy/);
+
+		const nestedDescriptionPaths: string[] = [];
+		const stack: Array<{ path: string; value: unknown }> = [{ path: "SubagentParams", value: schema }];
+		while (stack.length > 0) {
+			const current = stack.pop()!;
+			if (!current.value || typeof current.value !== "object") continue;
+			const node = current.value as JsonSchemaNode;
+			const pathParts = current.path.split(".");
+			const isTopLevelParameter = pathParts.length === 3 && pathParts[0] === "SubagentParams" && pathParts[1] === "properties";
+			if (typeof node.description === "string" && !isTopLevelParameter) nestedDescriptionPaths.push(`${current.path}.description`);
+			if (Array.isArray(current.value)) {
+				current.value.forEach((value, index) => stack.push({ path: `${current.path}[${index}]`, value }));
+			} else {
+				for (const [key, value] of Object.entries(node)) stack.push({ path: `${current.path}.${key}`, value });
+			}
+		}
+		assert.deepEqual(nestedDescriptionPaths, []);
+	});
+
+	it("preserves TypeBox metadata while pruning provider-visible descriptions", () => {
+		assert.ok(SubagentParams, "SubagentParams schema should exist");
+		const schema = SubagentParams as unknown as JsonSchemaNode;
+		const rootKind = Object.getOwnPropertyDescriptor(schema, "~kind");
+		assert.equal(rootKind?.value, "Object");
+		assert.equal(rootKind?.enumerable, false);
+
+		const agentSchema = getPropertySchema(schema, ["agent"]);
+		assert.equal(Object.getOwnPropertyDescriptor(agentSchema, "~kind")?.enumerable, false);
+		assert.equal(Object.getOwnPropertyDescriptor(agentSchema, "~optional")?.value, true);
+		assert.equal(Object.getOwnPropertyDescriptor(agentSchema, "~optional")?.enumerable, false);
+
+		const tasksSchema = getPropertySchema(schema, ["tasks"]);
+		const taskItemsSchema = tasksSchema?.items as JsonSchemaNode | undefined;
+		const taskCountSchema = getPropertySchema(taskItemsSchema, ["count"]);
+		assert.equal(Object.getOwnPropertyDescriptor(taskCountSchema, "~kind")?.enumerable, false);
+		assert.equal(Object.getOwnPropertyDescriptor(taskCountSchema, "~optional")?.value, true);
+		assert.equal(Object.getOwnPropertyDescriptor(taskCountSchema, "~optional")?.enumerable, false);
 	});
 
 	it("does not emit provider-rejected union schema shapes", () => {
@@ -355,6 +414,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ chain: [{ expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 }, parallel: { agent: "reviewer", task: "Review {target.path}", outputSchema: { type: "object" } }, collect: { as: "reviews" } }] },
 			{ agent: "worker", task: "Fix", acceptance: false },
 			{ agent: "worker", task: "Fix", acceptance: { level: "checked", review: false } },
+			{ tasks: [{ agent: "worker", task: "Fix", acceptance: false }] },
+			{ chain: [{ agent: "worker", acceptance: { level: "checked" } }] },
+			{ chain: [{ parallel: [{ agent: "worker", acceptance: { level: "verified", verify: [{ id: "unit", command: "npm test" }] } }] }] },
+			{ chain: [{ expand: { from: { output: "targets", path: "/items" }, maxItems: 4 }, parallel: { agent: "worker", acceptance: { level: "checked", review: false } }, collect: { as: "reviews" } }] },
 			{ config: { name: "reviewer", description: "Review things" } },
 			{ config: JSON.stringify({ name: "reviewer", description: "Review things" }) },
 		];
@@ -375,6 +438,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ chain: [{ expand: { from: { output: "targets", path: "/items" }, maxItems: 4 }, parallel: { agent: "reviewer" }, collect: { as: "reviews" }, when: "later" }] },
 			{ agent: "worker", task: "Fix", acceptance: true },
 			{ agent: "worker", task: "Fix", acceptance: { level: "checked", review: true } },
+			{ tasks: [{ agent: "worker", task: "Fix", acceptance: true }] },
+			{ chain: [{ agent: "worker", acceptance: { level: "checked", review: true } }] },
+			{ chain: [{ parallel: [{ agent: "worker", acceptance: { level: "checked", review: true } }] }] },
+			{ chain: [{ expand: { from: { output: "targets", path: "/items" }, maxItems: 4 }, parallel: { agent: "worker", acceptance: true }, collect: { as: "reviews" } }] },
 			{ config: [] },
 			{ config: null },
 		];
