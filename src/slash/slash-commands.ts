@@ -24,6 +24,7 @@ import {
 } from "./slash-live-state.ts";
 import {
 	SLASH_RESULT_TYPE,
+	SLASH_TEXT_RESULT_TYPE,
 	SLASH_SUBAGENT_CANCEL_EVENT,
 	SLASH_SUBAGENT_REQUEST_EVENT,
 	SLASH_SUBAGENT_RESPONSE_EVENT,
@@ -154,7 +155,20 @@ const makeProviderCompletions = (state: SubagentState) => (prefix: string) => {
 };
 
 function sendSlashText(pi: ExtensionAPI, text: string): void {
-	pi.sendMessage({ content: text, display: true });
+	pi.sendMessage({ customType: SLASH_TEXT_RESULT_TYPE, content: text, display: true });
+}
+
+async function withSlashStatus<T>(
+	ctx: ExtensionContext,
+	text: string,
+	run: () => Promise<T>,
+): Promise<T> {
+	if (ctx.hasUI) ctx.ui.setStatus("subagent-slash-text", text);
+	try {
+		return await run();
+	} finally {
+		if (ctx.hasUI) ctx.ui.setStatus("subagent-slash-text", undefined);
+	}
 }
 
 function parseSingleRequiredArg(args: string, usage: string): { ok: true; value: string } | { ok: false; message: string } {
@@ -651,13 +665,15 @@ export function registerSlashCommands(
 				return;
 			}
 			try {
-				const result = applySubagentProfile(parsed.value);
-				sendSlashText(pi, [
-					`Loaded subagent profile: ${parsed.value}`,
-					`Profile: ${result.filePath}`,
-					`Updated: ${result.settingsPath}`,
-					"Next: run /reload to apply it in the current session",
-				].join("\n"));
+				await withSlashStatus(ctx, `Loading profile ${parsed.value}…`, async () => {
+					const result = applySubagentProfile(parsed.value);
+					sendSlashText(pi, [
+						`Loaded subagent profile: ${parsed.value}`,
+						`Profile: ${result.filePath}`,
+						`Updated: ${result.settingsPath}`,
+						"Next: run /reload to apply it in the current session",
+					].join("\n"));
+				});
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
@@ -677,19 +693,21 @@ export function registerSlashCommands(
 				return;
 			}
 			try {
-				const result = await refreshProviderModelCatalog(pi, ctx, parsed.value, { force, maxAgeDays: DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS });
-				const lines = [
-					"Provider model catalog",
-					`Provider: ${parsed.value}`,
-					`Status: ${result.reused ? "fresh cache reused" : "refreshed"}`,
-					`File: ${result.filePath}`,
-					`Models: ${result.catalog.models.length}`,
-					`Refreshed at: ${result.catalog.refreshedAt}`,
-				];
-				if (result.heuristicFallbackCount > 0) {
-					lines.push(`Warning: ${result.heuristicFallbackCount} model${result.heuristicFallbackCount === 1 ? " was" : "s were"} classified with name heuristics fallback.`);
-				}
-				sendSlashText(pi, lines.join("\n"));
+				await withSlashStatus(ctx, `Refreshing provider models for ${parsed.value}…`, async () => {
+					const result = await refreshProviderModelCatalog(pi, ctx, parsed.value, { force, maxAgeDays: DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS });
+					const lines = [
+						"Provider model catalog",
+						`Provider: ${parsed.value}`,
+						`Status: ${result.reused ? "fresh cache reused" : "refreshed"}`,
+						`File: ${result.filePath}`,
+						`Models: ${result.catalog.models.length}`,
+						`Refreshed at: ${result.catalog.refreshedAt}`,
+					];
+					if (result.heuristicFallbackCount > 0) {
+						lines.push(`Warning: ${result.heuristicFallbackCount} model${result.heuristicFallbackCount === 1 ? " was" : "s were"} classified with name heuristics fallback.`);
+					}
+					sendSlashText(pi, lines.join("\n"));
+				});
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
@@ -706,26 +724,28 @@ export function registerSlashCommands(
 				return;
 			}
 			try {
-				const result = await generateProfilesForProvider(pi, ctx, parsed.value, { maxAgeDays: DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS });
-				const lines = [
-					"Generated subagent profiles",
-					`Provider: ${parsed.value}`,
-					`Catalog: ${result.catalogPath}`,
-					`Quota: ${result.quotaPath}`,
-					`  cheap=${result.quotaModels.cheap}`,
-					`  medium=${result.quotaModels.medium}`,
-					`  strong=${result.quotaModels.strong}`,
-					`Quality: ${result.qualityPath}`,
-					`  cheap=${result.qualityModels.cheap}`,
-					`  medium=${result.qualityModels.medium}`,
-					`  strong=${result.qualityModels.strong}`,
-				];
-				if (result.selectedHeuristicFallbackCount > 0) {
-					lines.push(`Warning: generated profiles depend on heuristic-only classification for ${result.selectedHeuristicFallbackCount} selected model${result.selectedHeuristicFallbackCount === 1 ? "" : "s"}.`);
-				} else if (result.heuristicFallbackCount > 0) {
-					lines.push(`Warning: provider catalog still contains ${result.heuristicFallbackCount} heuristic-classified model${result.heuristicFallbackCount === 1 ? "" : "s"}.`);
-				}
-				sendSlashText(pi, lines.join("\n"));
+				await withSlashStatus(ctx, `Generating profiles for ${parsed.value}…`, async () => {
+					const result = await generateProfilesForProvider(pi, ctx, parsed.value, { maxAgeDays: DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS });
+					const lines = [
+						"Generated subagent profiles",
+						`Provider: ${parsed.value}`,
+						`Catalog: ${result.catalogPath}`,
+						`Quota: ${result.quotaPath}`,
+						`  cheap=${result.quotaModels.cheap}`,
+						`  medium=${result.quotaModels.medium}`,
+						`  strong=${result.quotaModels.strong}`,
+						`Quality: ${result.qualityPath}`,
+						`  cheap=${result.qualityModels.cheap}`,
+						`  medium=${result.qualityModels.medium}`,
+						`  strong=${result.qualityModels.strong}`,
+					];
+					if (result.selectedHeuristicFallbackCount > 0) {
+						lines.push(`Warning: generated profiles depend on heuristic-only classification for ${result.selectedHeuristicFallbackCount} selected model${result.selectedHeuristicFallbackCount === 1 ? "" : "s"}.`);
+					} else if (result.heuristicFallbackCount > 0) {
+						lines.push(`Warning: provider catalog still contains ${result.heuristicFallbackCount} heuristic-classified model${result.heuristicFallbackCount === 1 ? "" : "s"}.`);
+					}
+					sendSlashText(pi, lines.join("\n"));
+				});
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
@@ -747,15 +767,17 @@ export function registerSlashCommands(
 				return;
 			}
 			try {
-				const result = await checkSubagentProfile(pi, ctx, parsed.value);
-				const lines = [
-					"Subagent profile check",
-					`Profile: ${result.profileName}`,
-					`File: ${result.filePath}`,
-					"",
-					...result.results.map((entry) => `${entry.agent} → ${entry.model} — registry ${entry.inRegistry ? "ok" : "missing"}; probe ${entry.probe.status}${entry.probe.message ? ` (${entry.probe.message.split(/\r?\n/, 1)[0]})` : ""}`),
-				];
-				sendSlashText(pi, lines.join("\n"));
+				await withSlashStatus(ctx, `Checking profile ${parsed.value}…`, async () => {
+					const result = await checkSubagentProfile(pi, ctx, parsed.value);
+					const lines = [
+						"Subagent profile check",
+						`Profile: ${result.profileName}`,
+						`File: ${result.filePath}`,
+						"",
+						...result.results.map((entry) => `${entry.agent} → ${entry.model} — registry ${entry.inRegistry ? "ok" : "missing"}; probe ${entry.probe.status}${entry.probe.message ? ` (${entry.probe.message.split(/\r?\n/, 1)[0]})` : ""}`),
+					];
+					sendSlashText(pi, lines.join("\n"));
+				});
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}

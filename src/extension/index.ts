@@ -43,6 +43,7 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
+	SLASH_TEXT_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CONTROL_EVENT,
@@ -285,6 +286,16 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
 		return createSlashResultComponent(details, options, theme);
+	});
+
+	pi.registerMessageRenderer<undefined>(SLASH_TEXT_RESULT_TYPE, (message, _options, _theme) => {
+		const content = typeof message.content === "string"
+			? message.content
+			: message.content
+				.filter((entry) => entry.type === "text")
+				.map((entry) => entry.text)
+				.join("\n");
+		return new Text(content, 0, 0);
 	});
 
 	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
