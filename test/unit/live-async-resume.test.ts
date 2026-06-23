@@ -60,6 +60,103 @@ describe("live async resume interrupt", () => {
 			assert.deepEqual(kills, [{ pid: process.pid, signal: ASYNC_RESUME_INTERRUPT_SIGNAL }]);
 			assert.equal(state.asyncJobs.get("run-live")?.activityState, undefined);
 			assert.equal(state.asyncJobs.get("run-live")?.updatedAt, 1234);
+			// The portable control request is dropped regardless of the signal path.
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "interrupt.json")), true);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("still interrupts a live async child when the OS signal is unavailable (ENOSYS on Windows)", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-live-async-resume-enosys-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const asyncDir = path.join(asyncRoot, "run-live");
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-live",
+				mode: "single",
+				state: "running",
+				pid: process.pid,
+				cwd: root,
+				startedAt: 100,
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running", startedAt: 100 }],
+			});
+			const target = resolveAsyncResumeTarget({ id: "run-live" }, { asyncDirRoot: asyncRoot, resultsDir });
+			assert.equal(target.kind, "live");
+
+			const state = {
+				asyncJobs: new Map([["run-live", {
+					asyncId: "run-live",
+					asyncDir,
+					status: "running" as const,
+					pid: process.pid,
+					activityState: "needs_attention" as const,
+					updatedAt: 100,
+				}]]),
+			};
+
+			const result = interruptLiveAsyncResumeTarget({
+				target,
+				state,
+				now: () => 7,
+				kill: () => {
+					const error = new Error("kill ENOSYS") as NodeJS.ErrnoException;
+					error.code = "ENOSYS";
+					throw error;
+				},
+			});
+
+			// The signal failed, but the file-based control inbox makes the interrupt succeed.
+			assert.deepEqual(result, { ok: true, asyncId: "run-live" });
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "interrupt.json")), true);
+			assert.equal(state.asyncJobs.get("run-live")?.activityState, undefined);
+			assert.equal(state.asyncJobs.get("run-live")?.updatedAt, 7);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not report success or leave a stale request when the runner pid is gone", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-live-async-resume-esrch-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const asyncDir = path.join(asyncRoot, "run-live");
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-live",
+				mode: "single",
+				state: "running",
+				pid: 12345,
+				cwd: root,
+				startedAt: 100,
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running", startedAt: 100 }],
+			});
+			const target = resolveAsyncResumeTarget({ id: "run-live" }, {
+				asyncDirRoot: asyncRoot,
+				resultsDir,
+				kill: (_pid, signal) => {
+					if (signal === 0) return true;
+					const error = new Error("missing process") as NodeJS.ErrnoException;
+					error.code = "ESRCH";
+					throw error;
+				},
+			});
+			assert.equal(target.kind, "live");
+
+			const result = interruptLiveAsyncResumeTarget({
+				target,
+				kill: () => {
+					const error = new Error("missing process") as NodeJS.ErrnoException;
+					error.code = "ESRCH";
+					throw error;
+				},
+			});
+
+			assert.deepEqual(result, { ok: false, message: "Failed to interrupt async run run-live: missing process" });
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "interrupt.json")), false);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

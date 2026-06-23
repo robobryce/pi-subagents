@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
+import { consumeInterruptRequest, watchAsyncControlInbox } from "./control-channel.ts";
 import { appendJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
 import { PI_CODING_AGENT_PACKAGE, getPiSpawnCommand, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, formatSavedOutputReference, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
@@ -1431,6 +1432,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	}
 
 	const interruptRunner = () => {
+		consumeInterruptRequest(asyncDir);
 		if (interrupted || statusPayload.state !== "running") return;
 		interrupted = true;
 		const now = Date.now();
@@ -1456,6 +1458,10 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		activeChildInterrupt?.();
 	};
 	process.on(ASYNC_INTERRUPT_SIGNAL, interruptRunner);
+	// Portable control inbox: the parent drops an interrupt request file here when
+	// it cannot deliver the OS signal (e.g. ENOSYS on Windows). Routes into the
+	// same graceful interruptRunner() so stop/steer work on every platform.
+	const disposeControlInbox = watchAsyncControlInbox(asyncDir, { onInterrupt: interruptRunner });
 	appendJsonl(
 		eventsPath,
 		JSON.stringify({
@@ -2241,6 +2247,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		clearInterval(activityTimer);
 		activityTimer = undefined;
 	}
+	disposeControlInbox();
 	const effectiveSessionFile = sessionFile ?? latestSessionFile;
 	const runEndedAt = Date.now();
 	statusPayload.state = interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed";

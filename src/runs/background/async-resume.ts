@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ASYNC_DIR, RESULTS_DIR, type AsyncStatus, type SubagentState } from "../../shared/types.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
+import { deliverInterruptRequest } from "./control-channel.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
 
 export const ASYNC_RESUME_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
@@ -64,7 +65,14 @@ export function interruptLiveAsyncResumeTarget(input: {
 		return { ok: false, message: `Async run ${asyncId} is live but no interrupt-capable runner pid was found.` };
 	}
 	try {
-		(input.kill ?? process.kill)(status.pid, ASYNC_RESUME_INTERRUPT_SIGNAL);
+		deliverInterruptRequest({
+			asyncDir: input.target.asyncDir,
+			pid: status.pid,
+			kill: input.kill,
+			signal: ASYNC_RESUME_INTERRUPT_SIGNAL,
+			now: input.now,
+			source: "async-resume",
+		});
 		const tracked = input.state?.asyncJobs.get(asyncId);
 		if (tracked) {
 			tracked.activityState = undefined;
