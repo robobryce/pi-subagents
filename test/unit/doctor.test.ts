@@ -68,6 +68,7 @@ describe("buildDoctorReport", () => {
 				orchestratorTarget: "subagent-chat-abc123",
 				expandTilde: (value) => value.replace(/^~\//, `${root}/home/`),
 				paths,
+				companionPackageLines: ["Companion packages", "- pi-intercom: inactive"],
 				deps: {
 					isAsyncAvailable: () => true,
 					discoverAgentsAll: () => ({
@@ -111,6 +112,8 @@ describe("buildDoctorReport", () => {
 			assert.match(report, /- skills: total 2 \(project 1, user-package 1\)/);
 			assert.match(report, /- bridge: inactive \(pi-intercom extension was not found\)/);
 			assert.match(report, /- pi-intercom: unavailable /);
+			assert.match(report, /Companion packages/);
+			assert.match(report, /- pi-intercom: inactive/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

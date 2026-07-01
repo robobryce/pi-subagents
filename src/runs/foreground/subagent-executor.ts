@@ -154,6 +154,7 @@ interface ExecutorDeps {
 	state: SubagentState;
 	config: ExtensionConfig;
 	asyncByDefault: boolean;
+	companionSuggestionLines?: (input: { surface: "list" | "doctor"; cwd: string; context?: "fresh" | "fork"; orchestratorTarget?: string }) => string[];
 	tempArtifactsDir: string;
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
@@ -2741,6 +2742,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							orchestratorTarget,
 							sessionError,
 							expandTilde: deps.expandTilde,
+							companionPackageLines: deps.companionSuggestionLines?.({
+								surface: "doctor",
+								cwd: requestCwd,
+								context: paramsWithResolvedCwd.context,
+								orchestratorTarget,
+							}),
 						}),
 					}],
 					details: { mode: "management", results: [] },
@@ -2828,7 +2835,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					details: { mode: "management" as const, results: [] },
 				};
 			}
-			return handleManagementAction(params.action, paramsWithResolvedCwd, { ...ctx, cwd: requestCwd, config: deps.config });
+			return handleManagementAction(params.action, paramsWithResolvedCwd, {
+				...ctx,
+				cwd: requestCwd,
+				config: deps.config,
+				companionSuggestionLines: () => {
+					if (params.action !== "list" || deps.state.companionSuggestionListShown) return [];
+					const lines = deps.companionSuggestionLines?.({
+						surface: "list",
+						cwd: requestCwd,
+						context: paramsWithResolvedCwd.context,
+					}) ?? [];
+					if (lines.length > 0) deps.state.companionSuggestionListShown = true;
+					return lines;
+				},
+			});
 		}
 
 		const { blocked, depth, maxDepth } = checkSubagentDepth(deps.config.maxSubagentDepth);

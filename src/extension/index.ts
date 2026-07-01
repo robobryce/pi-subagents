@@ -37,6 +37,14 @@ import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
 import { loadConfig } from "./config.ts";
 import {
+	buildCompanionDoctorLines,
+	buildCompanionListLines,
+	collectCompanionStatuses,
+	handleCompanionCommand,
+	maybeSendCompanionStartupMessage,
+	resolveCompanionOrchestratorTarget,
+} from "./companion-suggestions.ts";
+import {
 	type Details,
 	type SubagentState,
 	ASYNC_DIR,
@@ -250,7 +258,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
-	const config = loadConfig();
+	let config = loadConfig();
 	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
@@ -270,6 +278,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		completionSeen: new Map(),
 		watcher: null,
 		watcherRestartTimer: null,
+		companionSuggestionStartupShown: false,
+		companionSuggestionListShown: false,
 		resultFileCoalescer: {
 			schedule: () => false,
 			clear: () => {},
@@ -301,6 +311,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state,
 		config,
 		asyncByDefault,
+		companionSuggestionLines: ({ surface, cwd, context, orchestratorTarget }) => {
+			const statuses = collectCompanionStatuses({ pi, config, cwd, context, orchestratorTarget });
+			return surface === "doctor" ? buildCompanionDoctorLines(statuses) : buildCompanionListLines(statuses);
+		},
 		tempArtifactsDir,
 		getSubagentSessionRoot,
 		expandTilde,
@@ -417,6 +431,28 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return total + count;
 		}, 0);
 	}
+
+	pi.registerCommand("subagents-companions", {
+		description: "Show or hide pi-subagents companion package recommendations",
+		handler: async (args, ctx) => {
+			try {
+				const statuses = collectCompanionStatuses({
+					pi,
+					config,
+					cwd: ctx.cwd,
+					orchestratorTarget: resolveCompanionOrchestratorTarget(pi, ctx),
+				});
+				const result = handleCompanionCommand(args, ctx, statuses);
+				if (result.updatedConfig) config = result.updatedConfig;
+				pi.sendMessage({ content: result.text, display: true });
+				if (result.error && ctx.hasUI) ctx.ui.notify(result.text, "error");
+			} catch (error) {
+				const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+				pi.sendMessage({ content: `Failed to update companion suggestions: ${message}`, display: true });
+				if (ctx.hasUI) ctx.ui.notify(`Failed to update companion suggestions: ${message}`, "error");
+			}
+		},
+	});
 
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
@@ -576,6 +612,8 @@ DIAGNOSTICS:
 			}
 		}
 		state.lastUiContext = ctx;
+		state.companionSuggestionStartupShown = false;
+		state.companionSuggestionListShown = false;
 		cleanupSessionArtifacts(ctx);
 		clearPendingForegroundControlNotices(state);
 		resetJobs(ctx);
@@ -585,6 +623,18 @@ DIAGNOSTICS:
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
+		maybeSendCompanionStartupMessage({
+			pi,
+			ctx,
+			state,
+			statuses: collectCompanionStatuses({
+				pi,
+				config,
+				cwd: ctx.cwd,
+				orchestratorTarget: resolveCompanionOrchestratorTarget(pi, ctx),
+				fast: true,
+			}),
+		});
 	});
 
 	pi.on("session_shutdown", () => {

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Added configurable companion package recommendations for `pi-intercom` and `pi-prompt-template-model`, surfaced in session-start transcript messages, `subagent({ action: "list" })`, and `/subagents-doctor`, with `/subagents-companions` hide/show/status controls.
+
 ## [0.31.1] - 2026-06-25
 
 ### Added

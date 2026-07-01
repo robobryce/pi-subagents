@@ -218,6 +218,8 @@ Add `autofix` to `/parallel-review` or `/parallel-cleanup` to apply only the syn
 pi install npm:pi-intercom
 ```
 
+When `pi-intercom` is not active, `pi-subagents` may recommend it at session start, in `subagent({ action: "list" })`, and in `/subagents-doctor`. The recommendation is visible to the assistant so it can offer to run the install command or hide the recommendation after you approve that action.
+
 Most users do not call `intercom` directly. After `pi-intercom` is installed, `pi-subagents` can automatically give child agents a private coordination channel back to the parent session. The bridge recognizes the normal `pi install npm:pi-intercom` package install as well as legacy local extension checkouts.
 
 Use it for work where the child might need a decision instead of guessing:
@@ -1113,6 +1115,28 @@ Bridge activation also requires `pi-intercom` to be installed and enabled throug
 
 The default injected guidance tells children to use `contact_supervisor` with `reason: "need_decision"` when blocked or needing a decision, `reason: "progress_update"` only for meaningful blocked/progress updates, generic `intercom` as fallback plumbing, and avoid routine completion handoffs.
 
+### `companionSuggestions`
+
+```json
+{
+  "companionSuggestions": {
+    "enabled": true,
+    "packages": {
+      "pi-intercom": {
+        "surfaces": ["session_start", "list", "doctor"]
+      },
+      "pi-prompt-template-model": {
+        "surfaces": ["session_start", "list", "doctor"]
+      }
+    }
+  }
+}
+```
+
+Controls recommendations for optional companion packages. `pi-intercom` enables live supervisor decisions, progress updates, and grouped result delivery. `pi-prompt-template-model` makes subagent workflows reusable as prompt templates with model/thinking/skill/subagent frontmatter.
+
+Use `/subagents-companions status` to inspect recommendation status. Use `/subagents-companions hide pi-intercom workspace` or `/subagents-companions hide pi-prompt-template-model user` to hide a recommendation. Use `/subagents-companions show <package>` to show a workspace recommendation again. Set `companionSuggestions` to `false` to disable all companion recommendations.
+
 ### `worktreeSetupHook`
 
 ```json
@@ -1268,6 +1292,8 @@ Use url in the prompt to take screenshot: $@
 Then `/take-screenshot https://example.com` switches to Sonnet, delegates to `browser-screenshoter` with `/tmp/screenshots` as cwd, and restores your model when done. Runtime overrides like `--cwd=<path>` and `--subagent=<name>` work too.
 
 For more reusable workflows on top of subagents, including `/chain-prompts` and compare-style prompts such as `/best-of-n`, install `pi-prompt-template-model` separately and copy the examples you want into `~/.pi/agent/prompts/`.
+
+When `pi-prompt-template-model` is not active, `pi-subagents` may recommend it at session start, in `subagent({ action: "list" })`, and in `/subagents-doctor`. The recommendation is only a prompt; package installation still requires an explicit user-approved command.
 
 ## Runtime files
 

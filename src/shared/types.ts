@@ -712,6 +712,8 @@ export interface SubagentState {
 	completionSeen: Map<string, number>;
 	watcher: FSWatcher | null;
 	watcherRestartTimer: ReturnType<typeof setTimeout> | null;
+	companionSuggestionStartupShown?: boolean;
+	companionSuggestionListShown?: boolean;
 	resultFileCoalescer: {
 		schedule(file: string, delayMs?: number): boolean;
 		clear(): void;
@@ -829,6 +831,23 @@ export interface ProactiveSkillSubagentsConfig {
 	preferredAgent?: string;
 }
 
+export type CompanionSuggestionPackage = "pi-prompt-template-model" | "pi-intercom";
+export type CompanionSuggestionSurface = "session_start" | "list" | "doctor";
+
+export interface CompanionSuggestionPackageConfig {
+	enabled?: boolean;
+	surfaces?: CompanionSuggestionSurface[];
+	dismissed?: {
+		user?: boolean;
+		workspaces?: string[];
+	};
+}
+
+export interface CompanionSuggestionsConfig {
+	enabled?: boolean;
+	packages?: Partial<Record<CompanionSuggestionPackage, CompanionSuggestionPackageConfig>>;
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	forceTopLevelAsync?: boolean;
@@ -841,6 +860,7 @@ export interface ExtensionConfig {
 	worktreeSetupHookTimeoutMs?: number;
 	intercomBridge?: IntercomBridgeConfig;
 	proactiveSkillSubagents?: ProactiveSkillSubagentsConfig | false;
+	companionSuggestions?: CompanionSuggestionsConfig | false;
 }
 
 // ============================================================================

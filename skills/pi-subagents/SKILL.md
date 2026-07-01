@@ -632,6 +632,11 @@ If `pi-prompt-template-model` is installed, additional user prompt templates can
 `pi-subagents`. This is useful when a slash command should always run through a
 particular agent or with forked context.
 
+If `subagent({ action: "list" })`, `/subagents-doctor`, or a startup message recommends
+`pi-intercom` or `pi-prompt-template-model`, offer to run the shown `pi install npm:<package>`
+command only after user approval. To hide future recommendations, use
+`/subagents-companions hide <package> workspace` or `... user`.
+
 ## Important Constraints
 
 - **Forking requires a persisted parent session.** If the current session does not

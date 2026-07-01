@@ -483,6 +483,17 @@ Inspect cleanup.
 		assert.match(text, /Cleanup review\./);
 	});
 
+	it("can append companion package suggestions to list output", () => {
+		const listed = handleManagementAction("list", {}, {
+			cwd: tempDir,
+			modelRegistry: { getAvailable: () => [] },
+			companionSuggestionLines: () => ["Recommended companions:", "- pi-intercom is not active in this session."],
+		});
+		const text = readText(listed);
+		assert.match(text, /Recommended companions:/);
+		assert.match(text, /pi-intercom is not active/);
+	});
+
 	it("can disable proactive skill subagent suggestions in config", () => {
 		const ctx = {
 			cwd: tempDir,
