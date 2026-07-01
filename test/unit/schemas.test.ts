@@ -176,8 +176,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(maxRuntimeSchema, "maxRuntimeMs schema should exist");
 		assert.equal(timeoutSchema.minimum, 1);
 		assert.equal(maxRuntimeSchema.minimum, 1);
-		assert.match(String(timeoutSchema.description ?? ""), /foreground/i);
+		assert.match(String(timeoutSchema.description ?? ""), /foreground-only/i);
+		assert.match(String(timeoutSchema.description ?? ""), /async\/background/i);
 		assert.match(String(maxRuntimeSchema.description ?? ""), /timeoutMs/i);
+		assert.match(String(maxRuntimeSchema.description ?? ""), /async\/background/i);
 	});
 
 	it("includes subagent control fields", () => {

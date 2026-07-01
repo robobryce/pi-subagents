@@ -17,6 +17,7 @@ import { readStatus } from "../../shared/utils.ts";
 import { normalizeParallelGroups } from "./parallel-groups.ts";
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
 import { hasLiveNestedDescendants, updateAsyncJobNestedProjection } from "../shared/nested-events.ts";
+import { listAsyncRuns, type AsyncRunSummary } from "./async-status.ts";
 
 interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
@@ -35,6 +36,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	handleStarted: (data: unknown) => void;
 	handleComplete: (data: unknown) => void;
 	resetJobs: (ctx?: ExtensionContext) => void;
+	restoreActiveJobs: (ctx?: ExtensionContext) => void;
 } {
 	const completionRetentionMs = options.completionRetentionMs ?? 10000;
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
@@ -42,6 +44,55 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		renderWidget(ctx, jobs);
 		ctx.ui.requestRender?.();
+	};
+	const restoredControlEventCursor = (asyncDir: string) => {
+		try {
+			return fs.statSync(path.join(asyncDir, "events.jsonl")).size;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+			throw error;
+		}
+	};
+	const summaryToJob = (run: AsyncRunSummary): AsyncJobState => {
+		const groups = normalizeParallelGroups(run.parallelGroups, run.steps.length, run.chainStepCount ?? run.steps.length);
+		const activeGroup = run.currentStep !== undefined
+			? groups.find((group) => run.currentStep! >= group.start && run.currentStep! < group.start + group.count)
+			: undefined;
+		const visibleSteps = activeGroup
+			? run.steps.slice(activeGroup.start, activeGroup.start + activeGroup.count).map((step, index) => ({ ...step, index: activeGroup.start + index }))
+			: run.steps.map((step, index) => ({ ...step, index }));
+		return {
+			asyncId: run.id,
+			asyncDir: run.asyncDir,
+			status: run.state,
+			sessionId: run.sessionId,
+			activityState: run.activityState,
+			lastActivityAt: run.lastActivityAt,
+			currentTool: run.currentTool,
+			currentToolStartedAt: run.currentToolStartedAt,
+			currentPath: run.currentPath,
+			turnCount: run.turnCount,
+			toolCount: run.toolCount,
+			mode: run.mode,
+			agents: visibleSteps.map((step) => step.agent),
+			currentStep: run.currentStep,
+			chainStepCount: run.chainStepCount,
+			parallelGroups: groups,
+			steps: visibleSteps,
+			stepsTotal: visibleSteps.length,
+			runningSteps: visibleSteps.filter((step) => step.status === "running").length,
+			completedSteps: visibleSteps.filter((step) => step.status === "complete" || step.status === "completed").length,
+			hasParallelGroups: groups.length > 0,
+			activeParallelGroup: Boolean(activeGroup),
+			startedAt: run.startedAt,
+			updatedAt: run.lastUpdate ?? run.startedAt,
+			sessionDir: run.sessionDir,
+			outputFile: run.outputFile,
+			totalTokens: run.totalTokens,
+			sessionFile: run.sessionFile,
+			controlEventCursor: restoredControlEventCursor(run.asyncDir),
+			nestedChildren: run.nestedChildren,
+		};
 	};
 	const cancelCleanup = (asyncId: string) => {
 		const existingTimer = state.cleanupTimers.get(asyncId);
@@ -351,5 +402,22 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 	};
 
-	return { ensurePoller, handleStarted, handleComplete, resetJobs };
+	const restoreActiveJobs = (ctx?: ExtensionContext) => {
+		if (ctx?.hasUI) state.lastUiContext = ctx;
+		let runs: AsyncRunSummary[];
+		try {
+			runs = listAsyncRuns(asyncDirRoot, { states: ["queued", "running"], resultsDir, kill: options.kill, now: options.now });
+		} catch (error) {
+			console.error(`Failed to restore active async jobs from '${asyncDirRoot}':`, error);
+			return;
+		}
+		for (const run of runs) {
+			state.asyncJobs.set(run.id, summaryToJob(run));
+		}
+		if (runs.length === 0) return;
+		ensurePoller();
+		if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+	};
+
+	return { ensurePoller, handleStarted, handleComplete, resetJobs, restoreActiveJobs };
 }

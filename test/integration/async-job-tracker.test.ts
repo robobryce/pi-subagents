@@ -19,6 +19,7 @@ interface AsyncJobTrackerModule {
 	): {
 		ensurePoller(): void;
 		resetJobs(ctx?: unknown): void;
+		restoreActiveJobs(ctx?: unknown): void;
 		handleStarted(data: unknown): void;
 		handleComplete(data: unknown): void;
 	};
@@ -126,6 +127,101 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.ok(ui.renderRequests > 0, "expected widget cleanup to request a rerender");
 			assert.equal(ui.widgets.at(-1), undefined);
 		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("restores active async runs into the widget after reset", async () => {
+		const asyncRoot = createTempDir("pi-async-job-restore-");
+		try {
+			const runDir = path.join(asyncRoot, "run-restored");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-restored",
+				mode: "chain",
+				state: "running",
+				sessionId: "session-restored",
+				startedAt: 1000,
+				lastUpdate: 2000,
+				currentStep: 1,
+				chainStepCount: 3,
+				parallelGroups: [{ start: 1, count: 2, stepIndex: 1 }],
+				steps: [
+					{ agent: "scout", status: "complete" },
+					{ agent: "reviewer", status: "running", currentTool: "read" },
+					{ agent: "worker", status: "running" },
+					{ agent: "writer", status: "pending" },
+				],
+			}), "utf-8");
+			fs.writeFileSync(path.join(runDir, "events.jsonl"), `${JSON.stringify({
+				type: "subagent.control",
+				channels: ["event"],
+				event: {
+					type: "needs_attention",
+					to: "needs_attention",
+					ts: 123,
+					runId: "run-restored",
+					agent: "reviewer",
+					message: "old notice",
+				},
+			})}\n`, "utf-8");
+
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				pollIntervalMs: 10,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.restoreActiveJobs(ui.ctx as never);
+
+			const job = state.asyncJobs.get("run-restored");
+			assert.ok(job);
+			assert.equal(job.status, "running");
+			assert.equal(job.sessionId, "session-restored");
+			assert.deepEqual(job.agents, ["reviewer", "worker"]);
+			assert.deepEqual(job.steps?.map((step: { index?: number }) => step.index), [1, 2]);
+			assert.equal(job.stepsTotal, 2);
+			assert.equal(job.runningSteps, 2);
+			assert.equal(job.completedSteps, 0);
+			assert.equal(job.activeParallelGroup, true);
+			assert.ok(state.poller, "expected restored active jobs to start polling");
+			assert.ok(ui.renderRequests >= 2, "expected reset and restore to request widget renders");
+			assert.equal(typeof ui.widgets.at(-1), "function", "expected restored jobs to render the widget");
+
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			assert.equal(recorder.events.length, 0, "historical control events should not be replayed during restore");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("does not throw during restore when a persisted async status is malformed", () => {
+		const asyncRoot = createTempDir("pi-async-job-restore-bad-status-");
+		const originalError = console.error;
+		try {
+			const runDir = path.join(asyncRoot, "run-bad-status");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), "{bad json", "utf-8");
+
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const errors: unknown[][] = [];
+			console.error = (...args: unknown[]) => {
+				errors.push(args);
+			};
+
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				pollIntervalMs: 10,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			assert.doesNotThrow(() => tracker.restoreActiveJobs(ui.ctx as never));
+			assert.equal(state.asyncJobs.size, 0);
+			assert.equal(state.poller, null);
+			assert.match(String(errors[0]?.[0] ?? ""), /Failed to restore active async jobs/);
+		} finally {
+			console.error = originalError;
 			removeTempDir(asyncRoot);
 		}
 	});

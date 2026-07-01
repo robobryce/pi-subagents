@@ -26,6 +26,8 @@
 - Include bounded async runner stderr tails when stale-run reconciliation marks a startup crash failed. Thanks to Salem Sayed (@salemsayed) for #340.
 - Persist forked child session files when Pi returns a branch path before writing it to disk. Thanks to @trisforrestcam for #174.
 - Pass explicit `thinking: off` through to child model arguments as a `:off` suffix. Thanks to Thomas Dietert (@tdietert) for #147.
+- Restore queued and running detached async jobs into the widget after restarting Pi. Thanks to Vicary (@vicary) for #362.
+- Clarify that `timeoutMs` and `maxRuntimeMs` apply only to foreground subagent runs. Thanks to @pkese for #361.
 
 ## [0.31.1] - 2026-06-25
 
