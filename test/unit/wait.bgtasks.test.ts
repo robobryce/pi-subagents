@@ -1,7 +1,7 @@
 /**
- * wait × pi-patty-bg-tasks integration. Deterministic: no real subagents, no
+ * subagent_wait × pi-patty-bg-tasks integration. Deterministic: no real subagents, no
  * real bash. A fake bgTaskCount() models pi-patty-bg-tasks' process-global live
- * set, and a fake event bus emits patty:bg-task-finished. Asserts wait blocks on
+ * set, and a fake event bus emits patty:bg-task-finished. Asserts subagent_wait blocks on
  * outstanding background jobs and returns when one (or all) finish.
  */
 
@@ -9,9 +9,14 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import { waitForSubagents, type SubagentWaitDeps } from "../../src/runs/background/subagent-wait.ts";
+import { registerBackgroundWorkProvider } from "../../src/runs/background/bg-providers.ts";
 import type { SubagentState } from "../../src/shared/types.ts";
+
+function resetRegistry() {
+	delete (globalThis as Record<string, unknown>)["__pi_bg_work_providers_v1"];
+}
 
 function makeState(sessionId: string | null): SubagentState {
 	return {
@@ -49,7 +54,9 @@ function emptyRunsDeps(root: string, state: SubagentState, overrides: Partial<Su
 	};
 }
 
-describe("wait × background tasks", () => {
+describe("subagent_wait × background tasks", () => {
+	afterEach(resetRegistry);
+
 	it("nothing to wait for when no runs and no bg jobs", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-bg-none-"));
 		try {
@@ -98,9 +105,12 @@ describe("wait × background tasks", () => {
 			const realSleep = (ms: number, signal?: AbortSignal) => new Promise<void>((res) => {
 				const t = setTimeout(res, ms); signal?.addEventListener("abort", () => { clearTimeout(t); res(); }, { once: true });
 			});
+			// A provider both supplies the live count and declares the wake channel
+			// that subagent_wait subscribes to (bgTaskCount dep is left to the real path here).
+			registerBackgroundWorkProvider({ name: "patty", liveCount: () => live, wakeChannels: ["patty:bg-task-finished"] });
 			const startedAt = Date.now();
 			const p = waitForSubagents({ all: true }, undefined, emptyRunsDeps(root, makeState("s1"), {
-				bgTaskCount: () => live, events: bus, pollIntervalMs: 10_000, sleep: realSleep,
+				events: bus, pollIntervalMs: 10_000, sleep: realSleep,
 			}));
 			setTimeout(() => { live = 0; bus.emit("patty:bg-task-finished", { jobId: "job-1", status: "completed" }); }, 15);
 			const r = await p;
@@ -132,7 +142,7 @@ describe("wait × background tasks", () => {
 			}));
 			assert.equal(r.isError, undefined);
 			assert.match(textOf(r), /1 of 1 background job\(s\) finished/);
-			// subagent run still in flight → invites another wait
+			// subagent run still in flight -> invites another subagent_wait
 			assert.match(textOf(r), /still in flight/i);
 			assert.ok(polls <= 2, `bg finishing first should return promptly, polled ${polls}`);
 		} finally { fs.rmSync(root, { recursive: true, force: true }); }

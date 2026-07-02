@@ -3,7 +3,8 @@
  *
  * Used by both the parent extension (src/extension/index.ts) and the child
  * subagent runtime (src/runs/shared/subagent-prompt-runtime.ts) so subagents
- * that background a bash/agent job (pi-patty-bg-tasks) or launch their own
+ * that background work via any registered background-work provider (e.g.
+ * pi-patty-bg-tasks' bash/agent jobs; see bg-providers.ts) or launch their own
  * async runs can block on completion the same way the parent can.
  */
 
@@ -27,8 +28,9 @@ subagent_wait also returns when a subagent run needs attention (a child that wen
 
 /**
  * Register the `subagent_wait` tool on `pi` backed by `state`. `state` supplies
- * the current session id (for scoping async runs); background-job tracking reads
- * the pi-patty-bg-tasks process-global live set and needs no state.
+ * the current session id (for scoping async runs); background-job tracking sums
+ * the live counts of registered background-work providers (bg-providers.ts) and
+ * needs no state.
  */
 export function registerWaitTool(pi: ExtensionAPI, state: SubagentState, options: { waitTool?: WaitToolConfig; enabled?: boolean } = {}): void {
 	const enabled = options.enabled ?? resolveWaitToolConfig(options.waitTool).enabled;
