@@ -39,6 +39,7 @@ import { registerSubagentRpcBridge } from "./rpc.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../slash/slash-live-state.ts";
 import { inspectSubagentStatus } from "../runs/background/run-status.ts";
 import { registerWaitTool } from "../runs/background/wait-tool.ts";
+import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify, { parseSubagentNotifyContent, type SubagentNotifyDetails } from "../runs/background/notify.ts";
 import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/pi-args.ts";
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
@@ -526,6 +527,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		rpcBridge.dispose,
 	];
 	globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
+
+	// Non-interactive auto-drain: in a headless run (`pi -p ...`) there is no next
+	// turn to receive a detached run's completion, so a model that ends the turn
+	// without calling subagent_wait would orphan its async runs (and any registered
+	// background-work provider's jobs, e.g. pi-patty-bg-tasks). Block turn-end
+	// until that work drains, so the process can't exit mid-flight. No-op when a
+	// UI is present or nothing is outstanding.
+	pi.on("agent_end", async (_event, ctx) => {
+		if (ctx.hasUI) return;
+		await drainOutstandingWork({ state, events: pi.events });
+	});
 
 	pi.on("tool_result", (event, ctx) => {
 		if (event.toolName !== "subagent") return;

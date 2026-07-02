@@ -54,6 +54,7 @@ import {
 	type WaitToolConfig,
 } from "../../shared/types.ts";
 import { formatDuration } from "../../shared/formatters.ts";
+import { totalLiveBackgroundWork, backgroundWorkWakeChannels } from "./bg-providers.ts";
 
 /** States that mean a run is still in flight (not yet resolved). */
 const ACTIVE_STATES: ReadonlyArray<AsyncRunSummary["state"]> = ["queued", "running"];
@@ -135,39 +136,39 @@ export interface SubagentWaitDeps {
 	 */
 	events?: WaitEventBus;
 	/**
-	 * Count of in-flight background bash/agent jobs (pi-patty-bg-tasks). Defaults
-	 * to reading that extension's process-global live set; injectable for tests.
+	 * Count of in-flight background work across all registered providers. Defaults
+	 * to summing every provider's liveCount() (see bg-providers.ts); injectable
+	 * for tests.
 	 */
 	bgTaskCount?: () => number;
 }
 
-/** Bus channel emitted by pi-patty-bg-tasks when a background job finishes. */
-const BG_TASK_FINISHED_EVENT = "patty:bg-task-finished";
-
-/** Bus channels that indicate a run changed state or needs attention. */
-const WAKE_CHANNELS = [
+/** Subagent-run bus channels that indicate a run changed state or needs attention. */
+const SUBAGENT_WAKE_CHANNELS = [
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_FOREGROUND_COMPLETE_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_RESULT_INTERCOM_EVENT,
-	// pi-patty-bg-tasks emits this the instant a background bash/agent job
-	// finishes, so wait catches a backgrounded shell completing, not just
-	// subagent runs.
-	BG_TASK_FINISHED_EVENT,
 ];
 
 /**
- * Count of in-flight background jobs published by pi-patty-bg-tasks on a
- * process-global set (its shared-live.ts, keyed by this versioned symbol). Both
- * extensions share one Node process, so this is a dependency-free read of how
- * many backgrounded bash/agent jobs are running. Returns 0 when the extension
- * isn't installed (the global is absent).
+ * All channels wait wakes on: the subagent channels above plus whatever wake
+ * channels registered background-work providers contribute (e.g. a job-finished
+ * event from pi-patty-bg-tasks or any other provider). Computed per call so
+ * providers that register after module load are still honored.
  */
-const PATTY_LIVE_KEY = "__pi_patty_bg_live_jobs_v1";
+function wakeChannels(): string[] {
+	return [...SUBAGENT_WAKE_CHANNELS, ...backgroundWorkWakeChannels()];
+}
+
+/**
+ * Count of in-flight background work across every registered provider.
+ * Dependency-free: providers publish themselves on a shared process-global
+ * registry, so this returns 0 when nothing is registered. See bg-providers.ts.
+ */
 function liveBgTaskCount(): number {
-	const set = (globalThis as Record<string, unknown>)[PATTY_LIVE_KEY];
-	return set instanceof Set ? set.size : 0;
+	return totalLiveBackgroundWork();
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -216,7 +217,7 @@ function waitForWake(ms: number, signal: AbortSignal | undefined, deps: Subagent
 			return;
 		}
 		signal?.addEventListener("abort", done, { once: true });
-		for (const channel of WAKE_CHANNELS) {
+		for (const channel of wakeChannels()) {
 			try { unsubs.push(events.on(channel, done)); } catch { /* ignore bad channel */ }
 		}
 		// Poll-interval fallback so we still reconcile even if no event arrives.
@@ -368,8 +369,8 @@ export async function waitForSubagents(
 	// first run to finish.
 	const waitForAll = params.id ? true : params.all === true;
 
-	// Background bash/agent jobs (pi-patty-bg-tasks) are tracked only for an
-	// unscoped wait — an `id` targets a specific async subagent run.
+	// Background work from registered providers (e.g. pi-patty-bg-tasks) is
+	// tracked only for an unscoped wait — an `id` targets a specific async run.
 	const bgCountFn = deps.bgTaskCount ?? liveBgTaskCount;
 	const trackBg = !params.id;
 	const initialBgCount = trackBg ? bgCountFn() : 0;
@@ -479,7 +480,7 @@ export async function waitForSubagents(
 	const elapsed = formatDuration(now() - startedAt);
 	const outcome = terminalSummary ? ` Outcome: ${terminalSummary}.` : "";
 
-	// Background-job accounting (pi-patty-bg-tasks).
+	// Background-job accounting (registered background-work providers).
 	const bgNow = trackBg ? bgCountFn() : 0;
 	const bgFinished = Math.max(0, initialBgCount - bgNow);
 	const bgNote = initialBgCount > 0
