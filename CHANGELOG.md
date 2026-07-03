@@ -7,6 +7,7 @@
 
 ### Fixed
 - Derive live-detail and full-notification hints from Pi's configured expand key instead of hard-coding `Ctrl+O`. Thanks to Kylegl (@kylegl) for #364.
+- Tolerate transient Windows `EPERM`/`EBUSY`/`EACCES` locks when atomically replacing async JSON files. Thanks to ThanhNT29Jacky (@ThanhNT29Jacky) for #380.
 
 ## [0.32.0] - 2026-07-01
 
