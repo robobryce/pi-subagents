@@ -52,6 +52,8 @@ describe("registered subagent tool description", () => {
 		assert.match(description, /view: "transcript"/);
 		assert.match(description, /action: "steer"/);
 		assert.match(description, /schedule-list/);
+		assert.match(description, /action: "eject"/);
+		assert.match(description, /action: "disable"/);
 		assert.match(description, /status\.json/);
 		assert.match(description, /events\.jsonl/);
 	});
@@ -73,6 +75,8 @@ describe("registered subagent tool description", () => {
 		assert.match(description, /view:"transcript"/);
 		assert.match(description, /steer/);
 		assert.match(description, /schedule-list/);
+		assert.match(description, /eject/);
+		assert.match(description, /disable/);
 		assert.match(description, /status\.json/);
 		assert.match(description, /events\.jsonl/);
 	});

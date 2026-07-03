@@ -1005,19 +1005,20 @@ export function saveBuiltinAgentOverride(
 	return filePath;
 }
 
-export function removeBuiltinAgentOverride(cwd: string, name: string, scope: "user" | "project"): string {
+export function removeBuiltinAgentOverride(cwd: string, name: string, scope: "user" | "project"): { path: string; removed: boolean } {
 	const filePath = scope === "project" ? getProjectAgentSettingsPath(cwd) : getUserAgentSettingsPath();
 	if (!filePath) throw new Error("Project override is not available here. No project config root was found.");
-	if (!fs.existsSync(filePath)) return filePath;
+	if (!fs.existsSync(filePath)) return { path: filePath, removed: false };
 
 	const settings = readSettingsFileStrict(filePath);
 	const subagents = settings.subagents;
-	if (!subagents || typeof subagents !== "object" || Array.isArray(subagents)) return filePath;
+	if (!subagents || typeof subagents !== "object" || Array.isArray(subagents)) return { path: filePath, removed: false };
 	const nextSubagents = { ...(subagents as Record<string, unknown>) };
 	const agentOverrides = nextSubagents.agentOverrides;
-	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) return filePath;
+	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) return { path: filePath, removed: false };
 
 	const nextOverrides = { ...(agentOverrides as Record<string, unknown>) };
+	if (!Object.prototype.hasOwnProperty.call(nextOverrides, name)) return { path: filePath, removed: false };
 	delete nextOverrides[name];
 	if (Object.keys(nextOverrides).length > 0) nextSubagents.agentOverrides = nextOverrides;
 	else delete nextSubagents.agentOverrides;
@@ -1026,7 +1027,79 @@ export function removeBuiltinAgentOverride(cwd: string, name: string, scope: "us
 	else delete settings.subagents;
 
 	writeSettingsFile(filePath, settings);
+	return { path: filePath, removed: true };
+}
+
+export function mergeBuiltinAgentOverride(
+	cwd: string,
+	name: string,
+	scope: "user" | "project",
+	fields: BuiltinAgentOverrideConfig,
+): string {
+	const filePath = scope === "project" ? getProjectAgentSettingsPath(cwd) : getUserAgentSettingsPath();
+	if (!filePath) throw new Error("Project override is not available here. No project config root was found.");
+
+	const settings = readSettingsFileStrict(filePath);
+	const subagents = settings.subagents && typeof settings.subagents === "object" && !Array.isArray(settings.subagents)
+		? { ...(settings.subagents as Record<string, unknown>) }
+		: {};
+	const agentOverrides = subagents.agentOverrides && typeof subagents.agentOverrides === "object" && !Array.isArray(subagents.agentOverrides)
+		? { ...(subagents.agentOverrides as Record<string, unknown>) }
+		: {};
+
+	const existing = agentOverrides[name];
+	const base = existing && typeof existing === "object" && !Array.isArray(existing)
+		? existing as Record<string, unknown>
+		: {};
+	agentOverrides[name] = { ...base, ...cloneOverrideValue(fields) };
+	subagents.agentOverrides = agentOverrides;
+	settings.subagents = subagents;
+	writeSettingsFile(filePath, settings);
 	return filePath;
+}
+
+export function removeBuiltinAgentOverrideFields(
+	cwd: string,
+	name: string,
+	scope: "user" | "project",
+	fields: string[],
+): { path: string; removed: boolean } {
+	const filePath = scope === "project" ? getProjectAgentSettingsPath(cwd) : getUserAgentSettingsPath();
+	if (!filePath) throw new Error("Project override is not available here. No project config root was found.");
+	if (!fs.existsSync(filePath)) return { path: filePath, removed: false };
+
+	const settings = readSettingsFileStrict(filePath);
+	const subagents = settings.subagents;
+	if (!subagents || typeof subagents !== "object" || Array.isArray(subagents)) return { path: filePath, removed: false };
+	const agentOverrides = (subagents as Record<string, unknown>).agentOverrides;
+	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) return { path: filePath, removed: false };
+
+	const entry = (agentOverrides as Record<string, unknown>)[name];
+	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return { path: filePath, removed: false };
+
+	const nextEntry: Record<string, unknown> = { ...(entry as Record<string, unknown>) };
+	let removed = false;
+	for (const field of fields) {
+		if (Object.prototype.hasOwnProperty.call(nextEntry, field)) {
+			delete nextEntry[field];
+			removed = true;
+		}
+	}
+	if (!removed) return { path: filePath, removed: false };
+
+	const nextSubagents = { ...(subagents as Record<string, unknown>) };
+	if (Object.keys(nextEntry).length > 0) {
+		(nextSubagents.agentOverrides as Record<string, unknown>)[name] = nextEntry;
+	} else {
+		const nextOverrides = { ...(agentOverrides as Record<string, unknown>) };
+		delete nextOverrides[name];
+		if (Object.keys(nextOverrides).length > 0) nextSubagents.agentOverrides = nextOverrides;
+		else delete nextSubagents.agentOverrides;
+	}
+	if (Object.keys(nextSubagents).length > 0) settings.subagents = nextSubagents;
+	else delete settings.subagents;
+	writeSettingsFile(filePath, settings);
+	return { path: filePath, removed: true };
 }
 
 function listFilesRecursive(dir: string, predicate: (fileName: string) => boolean): string[] {
@@ -1325,7 +1398,13 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		userSettingsPath,
 		projectSettingsPath,
 	);
-	const packageAgents = applySubagentDefaultModel(packageSubagentPaths.agents.flatMap((dir) => loadAgentsFromDir(dir, "package")), defaultModel);
+	const packageAgents = applyCustomAgentOverrides(
+		applySubagentDefaultModel(packageSubagentPaths.agents.flatMap((dir) => loadAgentsFromDir(dir, "package")), defaultModel),
+		userSettings,
+		projectSettings,
+		userSettingsPath,
+		projectSettingsPath,
+	);
 	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents, packageAgents)
 		.filter((agent) => agent.disabled !== true);
 
@@ -1382,7 +1461,13 @@ export function discoverAgentsAll(cwd: string): {
 			if (!packageMap.has(agent.name)) packageMap.set(agent.name, agent);
 		}
 	}
-	const packageAgents = applySubagentDefaultModel(Array.from(packageMap.values()), defaultModel);
+	const packageAgents = applyCustomAgentOverrides(
+		applySubagentDefaultModel(Array.from(packageMap.values()), defaultModel),
+		userSettings,
+		projectSettings,
+		userSettingsPath,
+		projectSettingsPath,
+	);
 	const projectMap = new Map<string, AgentConfig>();
 	for (const dir of projectDirs) {
 		for (const agent of loadAgentsFromDir(dir, "project")) {

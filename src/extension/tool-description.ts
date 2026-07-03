@@ -39,6 +39,10 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • { action: "create", config: { name: "custom-agent", package: "code-analysis", systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, defaultContext, ... } }
 • { action: "update", agent: "code-analysis.custom-agent", config: { package: "analysis", ... } } - merge
 • { action: "delete", agent: "code-analysis.custom-agent" }
+• { action: "eject", agent: "reviewer", agentScope?: "user" | "project" } - copy a bundled/package agent to user/project scope as an editable custom file that shadows the original (default scope: user)
+• { action: "disable", agent: "reviewer", agentScope?: "user" | "project" } - hide any agent from runtime discovery via a reversible settings override (default scope: user)
+• { action: "enable", agent: "reviewer", agentScope?: "user" | "project" } - remove a disabled override and restore discovery
+• { action: "reset", agent: "reviewer", agentScope?: "user" | "project" } - delete the scope's custom agent file and/or settings override, restoring the bundled default
 • Use chainName for chain operations; packaged chains also use dotted runtime names
 
 CONTROL:
@@ -71,7 +75,7 @@ EXECUTE:
 • If list shows proactive skill subagent suggestions, use a small fresh-context fanout only when the task is broad enough.
 
 MANAGE / CONTROL:
-• Use action without execution fields: list, get, models, create, update, delete, doctor.
+• Use action without execution fields: list, get, models, create, update, delete, eject, disable, enable, reset, doctor.
 • Async control actions: status, interrupt, resume, steer, append-step. Use status view:"fleet" for active-run overview, view:"transcript" to tail child output, and steer for non-terminal live guidance. Use id/runId prefixes carefully; use index for a specific child.
 • Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.
 
