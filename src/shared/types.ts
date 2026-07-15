@@ -694,6 +694,10 @@ export interface AsyncStartedEvent {
 	mode?: SubagentRunMode;
 	agent?: string;
 	agents?: string[];
+	/** Truncated first child task retained for backwards compatibility. */
+	task?: string;
+	/** Workflow-level caller task, falling back to the first child task. */
+	goal?: string;
 	chain?: string[];
 	chainStepCount?: number;
 	parallelGroups?: AsyncParallelGroupStatus[];
@@ -880,6 +884,8 @@ export interface SubagentState {
 	subagentInProgress?: boolean;
 	subagentSpawns?: { sessionId: string | null; count: number };
 	asyncJobs: Map<string, AsyncJobState>;
+	/** Current-session active and recent async runs for the native fleet inspector. */
+	fleetJobs?: Map<string, AsyncJobState>;
 	foregroundRuns?: Map<string, ForegroundResumeRun>;
 	foregroundControls: Map<string, {
 		runId: string;
@@ -1043,6 +1049,8 @@ export interface ScheduledRunsConfig {
 
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
+	/** Show the above-editor async runs widget. Defaults to true. */
+	asyncWidget?: boolean;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */
 	toolDescriptionMode?: ToolDescriptionMode;
 	forceTopLevelAsync?: boolean;

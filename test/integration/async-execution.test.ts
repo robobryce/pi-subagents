@@ -18,6 +18,7 @@ import type { MockPi } from "../support/helpers.ts";
 import { deliverInterruptRequest } from "../../src/runs/background/control-channel.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { MAX_CHILD_PENDING_LINE_BYTES, MAX_CHILD_STDERR_BYTES } from "../../src/runs/shared/child-protocol.ts";
+import { SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/shared/types.ts";
 
 interface AsyncExecutionResult {
 	content: Array<{ text?: string }>;
@@ -828,17 +829,30 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			includeMetadata: false,
 			cleanupDays: 7,
 		};
+		const emitted: Array<{ channel: string; data: unknown }> = [];
 		const commonParams = {
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			ctx: {
+				pi: { events: { emit(channel: string, data: unknown) { emitted.push({ channel, data }); } } },
+				cwd: tempDir,
+				currentSessionId: "session-1",
+			},
 			artifactConfig,
 			shareEnabled: false,
 			maxSubagentDepth: 2,
 		};
+		const startedEvent = (id: string): { task?: string; goal?: string } => {
+			const event = emitted.find((entry) => entry.channel === SUBAGENT_ASYNC_STARTED_EVENT && (entry.data as { id?: string }).id === id);
+			assert.ok(event, `missing async-started event for ${id}`);
+			return event.data as { task?: string; goal?: string };
+		};
 		mockPi.onCall({ output: "single done" });
 		const singleId = `async-handoff-single-${Date.now().toString(36)}`;
+		const wrappedTask = `Fork preamble: ${"execution ".repeat(20)}`;
+		const rawGoal = `Caller-facing goal: ${"raw ".repeat(40)}`;
 		const singleResult = executeAsyncSingle(singleId, {
 			agent: "worker",
-			task: "Do work",
+			task: wrappedTask,
+			goal: rawGoal,
 			agentConfig: makeAgent("worker"),
 			...commonParams,
 		});
@@ -846,6 +860,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(singleResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		assert.match(singleResult.content[0]?.text ?? "", /call subagent_wait\(\)/);
 		assert.match(singleResult.content[0]?.text ?? "", /there is no next turn, so use subagent_wait\(\)/);
+		assert.equal(startedEvent(singleId).task, wrappedTask.slice(0, 50));
+		assert.equal(startedEvent(singleId).goal, rawGoal.slice(0, 120));
 		await waitForAsyncResultFile(singleId, 30_000);
 
 		mockPi.onCall({ output: "parallel one done" });
@@ -860,6 +876,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(parallelResult.content[0]?.text ?? "", /Async parallel:/);
 		assert.match(parallelResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		assert.match(parallelResult.content[0]?.text ?? "", /call subagent_wait\(\)/);
+		assert.equal(startedEvent(parallelId).goal, "Do one");
 		const parallelResultPath = await waitForAsyncResultFile(parallelId, 10_000);
 		const parallelPayload = JSON.parse(fs.readFileSync(parallelResultPath, "utf-8")) as { agent?: string; mode?: string };
 		assert.equal(parallelPayload.mode, "parallel");
@@ -867,13 +884,19 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		mockPi.onCall({ output: "chain done" });
 		const chainId = `async-handoff-chain-${Date.now().toString(36)}`;
+		const chainGoal = `Coordinate the complete workflow ${"goal ".repeat(30)}`;
+		const chainChildTask = `Do chained work ${"child ".repeat(15)}`;
 		const chainResult = executeAsyncChain(chainId, {
-			chain: [{ agent: "worker", task: "Do chained work" }],
+			task: chainGoal,
+			chain: [{ agent: "worker", task: chainChildTask }],
 			agents: [makeAgent("worker")],
 			...commonParams,
 		});
 		assert.match(chainResult.content[0]?.text ?? "", /Async chain:/);
 		assert.match(chainResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
+		const chainEvent = startedEvent(chainId);
+		assert.equal(chainEvent.task, chainChildTask.slice(0, 50));
+		assert.equal(chainEvent.goal, chainGoal.slice(0, 120));
 		await waitForAsyncResultFile(chainId, 10_000);
 	});
 

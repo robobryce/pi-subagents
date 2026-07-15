@@ -23,6 +23,7 @@ interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
 	pollIntervalMs?: number;
 	resultsDir?: string;
+	widgetEnabled?: boolean;
 	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
 	now?: () => number;
 }
@@ -30,9 +31,20 @@ interface AsyncJobTrackerOptions {
 const CONTROL_EVENT_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CONTROL_EVENT_LINE_BYTES = 1024 * 1024;
 const CONTROL_EVENT_SCAN_WINDOW_BYTES = 2 * 1024 * 1024;
+const MAX_RECENT_FLEET_JOBS = 20;
+
+function rememberFleetJob(state: SubagentState, job: AsyncJobState): void {
+	state.fleetJobs ??= new Map();
+	state.fleetJobs.set(job.asyncId, job);
+	const terminal = [...state.fleetJobs.values()]
+		.filter((candidate) => candidate.status === "complete" || candidate.status === "failed" || candidate.status === "paused" || candidate.status === "stopped")
+		.sort((left, right) => (right.updatedAt ?? right.startedAt ?? 0) - (left.updatedAt ?? left.startedAt ?? 0));
+	for (const stale of terminal.slice(MAX_RECENT_FLEET_JOBS)) state.fleetJobs.delete(stale.asyncId);
+}
 
 export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, asyncDirRoot: string, options: AsyncJobTrackerOptions = {}): {
 	ensurePoller: () => void;
+	refreshWidget: (ctx: ExtensionContext) => void;
 	handleStarted: (data: unknown) => void;
 	handleComplete: (data: unknown) => void;
 	resetJobs: (ctx?: ExtensionContext) => void;
@@ -42,9 +54,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
 	const resultsDir = options.resultsDir ?? RESULTS_DIR;
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
-		renderWidget(ctx, jobs);
+		renderWidget(ctx, options.widgetEnabled === false ? [] : jobs);
 		ctx.ui.requestRender?.();
 	};
+	const refreshWidget = (ctx: ExtensionContext) => rerenderWidget(ctx);
 	const restoredControlEventCursor = (asyncDir: string) => {
 		try {
 			return fs.statSync(path.join(asyncDir, "events.jsonl")).size;
@@ -314,8 +327,11 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.turnBudgetExceeded = status.turnBudgetExceeded ?? job.turnBudgetExceeded;
 						job.wrapUpRequested = status.wrapUpRequested ?? job.wrapUpRequested;
 						job.sessionFile = status.sessionFile ?? job.sessionFile;
-						if ((job.status === "complete" || job.status === "failed" || job.status === "paused" || job.status === "stopped") && !nestedRefreshFailed && !hasLiveNestedDescendants(job.nestedChildren) && (previousStatus !== job.status || !state.cleanupTimers.has(job.asyncId))) {
-							scheduleCleanup(job.asyncId);
+						if (job.status === "complete" || job.status === "failed" || job.status === "paused" || job.status === "stopped") {
+							rememberFleetJob(state, job);
+							if (!nestedRefreshFailed && !hasLiveNestedDescendants(job.nestedChildren) && (previousStatus !== job.status || !state.cleanupTimers.has(job.asyncId))) {
+								scheduleCleanup(job.asyncId);
+							}
 						}
 						if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 						continue;
@@ -330,6 +346,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.status = "failed";
 						job.updatedAt = Date.now();
 					}
+					rememberFleetJob(state, job);
 					if (!hasLiveNestedDescendants(job.nestedChildren) && !state.cleanupTimers.has(job.asyncId)) {
 						scheduleCleanup(job.asyncId);
 					}
@@ -376,6 +393,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			turnBudget: info.turnBudget,
 			controlEventCursor: 0,
 		});
+		rememberFleetJob(state, state.asyncJobs.get(info.id)!);
 		ensurePoller();
 		if (state.lastUiContext) {
 			rerenderWidget(state.lastUiContext);
@@ -401,6 +419,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				console.error(`Failed to refresh nested async descendants for '${job.asyncDir}':`, error);
 			}
 		}
+		if (job) rememberFleetJob(state, job);
 		if (state.lastUiContext) {
 			rerenderWidget(state.lastUiContext);
 		}
@@ -413,6 +432,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
+		state.fleetJobs?.clear();
 		state.foregroundControls?.clear();
 		state.lastForegroundControlId = null;
 		state.resultFileCoalescer.clear();
@@ -433,12 +453,14 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			return;
 		}
 		for (const run of runs) {
-			state.asyncJobs.set(run.id, summaryToJob(run));
+			const job = summaryToJob(run);
+			state.asyncJobs.set(run.id, job);
+			rememberFleetJob(state, job);
 		}
 		if (runs.length === 0) return;
 		ensurePoller();
 		if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
 	};
 
-	return { ensurePoller, handleStarted, handleComplete, resetJobs, restoreActiveJobs };
+	return { ensurePoller, refreshWidget, handleStarted, handleComplete, resetJobs, restoreActiveJobs };
 }
